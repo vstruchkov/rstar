@@ -1,7 +1,7 @@
 use crate::node::{envelope_for_children, ParentNode, RTreeNode};
 use crate::object::RTreeObject;
 use crate::params::{InsertionStrategy, RTreeParams};
-use crate::point::{Point, PointExt};
+use crate::point::{cmp_total, Point, PointExt};
 use crate::rtree::RTree;
 use crate::{envelope::Envelope, object::Distance};
 
@@ -334,11 +334,10 @@ where
     node.children.sort_unstable_by(|l, r| {
         let l_center = l.envelope().center();
         let r_center = r.envelope().center();
-        l_center
-            .sub(&center)
-            .length_2()
-            .partial_cmp(&(r_center.sub(&center)).length_2())
-            .unwrap()
+        cmp_total(
+            &l_center.sub(&center).length_2(),
+            &r_center.sub(&center).length_2(),
+        )
     });
     let num_children = node.children.len();
     let result = node

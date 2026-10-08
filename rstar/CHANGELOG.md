@@ -7,6 +7,7 @@
 
 ## Fixed
 - Fixed `bulk_load` creating trees with leaves on different levels for some element counts (e.g. 25 elements with the default parameters), which made later insertions panic with "This is a bug in rstar.". All nodes of a bulk loaded tree but the root are now at least half full and never larger than `MAX_SIZE`.
+- NaN coordinates do not make `bulk_load`, `insert` and nearest neighbor queries panic anymore, and do not find their way into the envelopes of parent nodes, where they used to hide other elements from queries. Elements with NaN coordinates stay in the tree, but can neither be located nor removed by value.
 - Fixed `drain_within_distance` panicking with an arithmetic overflow on an empty tree with integer coordinates. `locate_within_distance` was already guarded against this, its draining counterpart was not.
 
 

@@ -1,4 +1,4 @@
-use crate::point::min_inline;
+use crate::point::{cmp_total, min_inline};
 use crate::{
     node::{ParentNode, RTreeNode},
     object::Distance,
@@ -49,7 +49,7 @@ where
 {
     fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {
         // Inverse comparison creates a min heap
-        other.distance.partial_cmp(&self.distance).unwrap()
+        cmp_total(&other.distance, &self.distance)
     }
 }
 
