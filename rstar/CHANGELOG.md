@@ -1,6 +1,10 @@
 # Unreleased
 
+## Changed
+- `bulk_load` partitions the elements in place instead of copying every slab into a new `Vec` and is 2-3 times faster. Nodes are filled more densely, so the resulting tree has fewer nodes and the minimal height.
+
 ## Fixed
+- Fixed `bulk_load` creating trees with leaves on different levels for some element counts (e.g. 25 elements with the default parameters), which made later insertions panic with "This is a bug in rstar.". All nodes of a bulk loaded tree but the root are now at least half full and never larger than `MAX_SIZE`.
 - Fixed `drain_within_distance` panicking with an arithmetic overflow on an empty tree with integer coordinates. `locate_within_distance` was already guarded against this, its draining counterpart was not.
 
 
