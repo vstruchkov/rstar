@@ -1296,6 +1296,79 @@ mod test {
         }
     }
 
+    /// Elements with NaN coordinates can neither be located nor removed, but they must not
+    /// make the tree panic or hide other elements.
+    #[test]
+    fn test_nan_coordinates() {
+        use crate::primitives::Rectangle;
+        use crate::test_utilities::{create_random_rectangles, SEED_2};
+
+        fn check(tree: &RTree<Rectangle<[f64; 2]>>, expected: &[Rectangle<[f64; 2]>]) {
+            use crate::RTreeObject;
+
+            let envelope = tree.root().envelope();
+            assert!(envelope
+                .lower()
+                .iter()
+                .chain(&envelope.upper())
+                .all(|c| !c.is_nan()));
+            for rectangle in expected {
+                assert!(tree.contains(rectangle));
+                let envelope = rectangle.envelope();
+                assert!(tree
+                    .locate_in_envelope_intersecting(envelope)
+                    .any(|r| r == rectangle));
+                assert!(tree.nearest_neighbor(envelope.lower()).is_some());
+            }
+            let query = [f64::NAN, 0.5];
+            assert_eq!(tree.nearest_neighbor_iter(query).count(), tree.size());
+            assert_eq!(tree.locate_all_at_point(query).count(), 0);
+            tree.nearest_neighbor(query);
+        }
+
+        const NAN: f64 = f64::NAN;
+        let finite = create_random_rectangles(600, SEED_1);
+        let more_finite = create_random_rectangles(300, SEED_2);
+        let invalid: Vec<_> = (0..60)
+            .map(|i| {
+                let v = f64::from(i) / 60.;
+                match i % 5 {
+                    0 => Rectangle::from_corners([NAN, v], [v, 1.0]),
+                    1 => Rectangle::from_corners([v, NAN], [1.0, v]),
+                    2 => Rectangle::from_corners([v, v], [NAN, 1.0]),
+                    3 => Rectangle::from_corners([NAN, NAN], [NAN, NAN]),
+                    _ => Rectangle::from_corners([f64::NEG_INFINITY, v], [f64::INFINITY, NAN]),
+                }
+            })
+            .collect();
+        // Spread the invalid elements among the valid ones
+        let mut elements = finite.clone();
+        for (i, rectangle) in invalid.iter().enumerate() {
+            elements.insert(i * 7, *rectangle);
+        }
+
+        let mut bulk_loaded = RTree::bulk_load(elements.clone());
+        check(&bulk_loaded, &finite);
+        let mut inserted = RTree::new();
+        for element in &elements {
+            inserted.insert(*element);
+        }
+        check(&inserted, &finite);
+
+        for tree in [&mut bulk_loaded, &mut inserted] {
+            for (old, new) in finite.iter().zip(&more_finite) {
+                assert!(tree.remove(old).is_some());
+                tree.insert(*new);
+            }
+            for rectangle in &invalid {
+                tree.insert(*rectangle);
+            }
+            assert_eq!(tree.size(), finite.len() + 2 * invalid.len());
+            let expected: Vec<_> = more_finite.iter().chain(&finite[300..]).copied().collect();
+            check(tree, &expected);
+        }
+    }
+
     #[test]
     fn test_fmt_debug() {
         let tree = RTree::bulk_load(vec![[0, 1], [0, 1]]);

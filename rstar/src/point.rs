@@ -1,3 +1,4 @@
+use core::cmp::Ordering;
 use core::fmt::Debug;
 use num_traits::{Bounded, Num, Signed, Zero};
 
@@ -268,28 +269,44 @@ pub trait PointExt: Point {
     }
 }
 
+/// Returns the smaller value, or `a` if the values cannot be compared (`b` is NaN): merging
+/// an envelope with a NaN coordinate into another envelope leaves the latter untouched.
 #[inline]
 pub(crate) fn min_inline<S>(a: S, b: S) -> S
 where
     S: PartialOrd,
 {
-    if a < b {
-        a
-    } else {
+    if b < a {
         b
+    } else {
+        a
     }
 }
 
+/// Returns the larger value, or `a` if the values cannot be compared (`b` is NaN).
 #[inline]
 pub(crate) fn max_inline<S>(a: S, b: S) -> S
 where
     S: PartialOrd,
 {
-    if a > b {
-        a
-    } else {
+    if b > a {
         b
+    } else {
+        a
     }
+}
+
+/// A total order for scalars: values that cannot be compared (NaN) are equal to each other
+/// and larger than all other values.
+#[inline]
+pub(crate) fn cmp_total<S>(a: &S, b: &S) -> Ordering
+where
+    S: PartialOrd,
+{
+    a.partial_cmp(b).unwrap_or_else(|| {
+        let is_nan = |value: &S| value.partial_cmp(value).is_none();
+        is_nan(a).cmp(&is_nan(b))
+    })
 }
 
 impl<S, const N: usize> Point for [S; N]

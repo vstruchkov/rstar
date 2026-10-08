@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Fixed
+- NaN coordinates do not make `bulk_load`, `insert` and nearest neighbor queries panic anymore, and do not find their way into the envelopes of parent nodes, where they used to hide other elements from queries. Elements with NaN coordinates stay in the tree, but can neither be located nor removed by value.
 - Fixed `drain_within_distance` panicking with an arithmetic overflow on an empty tree with integer coordinates. `locate_within_distance` was already guarded against this, its draining counterpart was not.
 
 
