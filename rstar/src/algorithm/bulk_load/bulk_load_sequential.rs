@@ -48,8 +48,8 @@ where
 /// Partitions the last `len` elements into `clusters` clusters of (almost) equal size and
 /// appends the subtree of each cluster to `children`, last cluster first.
 ///
-/// The elements are split into slabs along the axis `dims_left - 1`, every slab holding a whole
-/// number of clusters, and the slabs are split further along the remaining axes. If
+/// The elements are split into slabs along one axis, every slab holding a whole number of
+/// clusters, and the slabs are split further along the `dims_left - 1` remaining axes. If
 /// `max_clusters` allows for it, the number of clusters is raised to fill the grid of slabs:
 /// clusters of the same shape overlap less than a grid with a row of wider clusters.
 fn partition_into_clusters<T, Params>(
@@ -80,8 +80,11 @@ fn partition_into_clusters<T, Params>(
     let slab_clusters_end = |slab: usize| slab * clusters / slabs;
     let slab_end = |slab: usize| slab_clusters_end(slab) * len / clusters;
 
+    // The first axis gets the most slabs. Rotating it with the level of the tree keeps the
+    // envelopes of the nodes from being stretched along the same axis on every level.
+    let axis = (dims_left - 1 + subtree_height) % <T::Envelope as Envelope>::Point::DIMENSIONS;
     let start = elements.len() - len;
-    select_slabs(&mut elements[start..], dims_left - 1, 0, slabs, &slab_end);
+    select_slabs(&mut elements[start..], axis, 0, slabs, &slab_end);
     for slab in (0..slabs).rev() {
         let slab_clusters = slab_clusters_end(slab + 1) - slab_clusters_end(slab);
         partition_into_clusters::<_, Params>(
