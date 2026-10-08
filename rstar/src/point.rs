@@ -303,10 +303,20 @@ pub(crate) fn cmp_total<S>(a: &S, b: &S) -> Ordering
 where
     S: PartialOrd,
 {
-    a.partial_cmp(b).unwrap_or_else(|| {
-        let is_nan = |value: &S| value.partial_cmp(value).is_none();
-        is_nan(a).cmp(&is_nan(b))
-    })
+    match a.partial_cmp(b) {
+        Some(ordering) => ordering,
+        None => cmp_incomparable(a, b),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn cmp_incomparable<S>(a: &S, b: &S) -> Ordering
+where
+    S: PartialOrd,
+{
+    let is_nan = |value: &S| value.partial_cmp(value).is_none();
+    is_nan(a).cmp(&is_nan(b))
 }
 
 impl<S, const N: usize> Point for [S; N]
