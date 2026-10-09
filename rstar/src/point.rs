@@ -303,14 +303,9 @@ pub(crate) fn cmp_total<S>(a: &S, b: &S) -> Ordering
 where
     S: PartialOrd,
 {
-    if a < b {
-        Ordering::Less
-    } else if a > b {
-        Ordering::Greater
-    } else if a == b {
-        Ordering::Equal
-    } else {
-        cmp_incomparable(a, b)
+    match a.partial_cmp(b) {
+        Some(ordering) => ordering,
+        None => cmp_incomparable(a, b),
     }
 }
 
