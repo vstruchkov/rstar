@@ -5,110 +5,120 @@ use crate::params::RTreeParams;
 use crate::point::Point;
 
 #[cfg(not(test))]
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
-use super::cluster_group_iterator::ClusterGroupIterator;
-
-/// Builds a subtree of the given `height` from `elements`.
+/// Builds the subtree of the given `height` over the last `len` elements, removing them from
+/// `elements`.
 ///
-/// The height is fixed by the caller (not derived from the number of elements again), which
-/// keeps all leaves on the same level.
-fn bulk_load_recursive<T, Params>(mut elements: Vec<T>, height: usize) -> ParentNode<T>
+/// The height is fixed by the caller (not derived from `len` again), which keeps all leaves on
+/// the same level.
+fn bulk_load_recursive<T, Params>(elements: &mut Vec<T>, len: usize, height: usize) -> ParentNode<T>
 where
     T: RTreeObject,
     <T::Envelope as Envelope>::Point: Point,
     Params: RTreeParams,
 {
+    let start = elements.len() - len;
     if height <= 1 {
-        // Reached leaf level. Shrink excess capacity so the in-place collect
-        // (which reuses the allocation when size_of::<T> == size_of::<RTreeNode<T>>)
-        // doesn't preserve a massively over-sized buffer in the final tree node.
-        elements.shrink_to_fit();
-        let elements: Vec<_> = elements.into_iter().map(RTreeNode::Leaf).collect();
-        return ParentNode::new_parent(elements);
+        // Reached leaf level. Draining allocates the node with its exact size.
+        let leaves = elements.drain(start..).map(RTreeNode::Leaf).collect();
+        return ParentNode::new_parent(leaves);
     }
     // The number of elements each subtree can hold
     let subtree_capacity = Params::MAX_SIZE.saturating_pow(height as u32 - 1);
     // How many clusters will this node contain at least
-    let clusters = elements.len().div_ceil(subtree_capacity);
+    let clusters = len.div_ceil(subtree_capacity);
     // More clusters would leave some subtree less than half full
-    let max_clusters = (elements.len() / subtree_capacity.div_ceil(2)).min(Params::MAX_SIZE);
-
-    let iterator = PartitioningTask::<_, Params> {
-        subtree_height: height - 1,
-        work_queue: vec![PartitioningState {
-            elements,
-            clusters,
-            max_clusters,
-            remaining_axes: <T::Envelope as Envelope>::Point::DIMENSIONS,
-        }],
-        _params: Default::default(),
-    };
-    ParentNode::new_parent(iterator.collect())
+    let max_clusters = (len / subtree_capacity.div_ceil(2)).min(Params::MAX_SIZE);
+    let mut children = Vec::with_capacity(max_clusters);
+    partition_into_clusters::<_, Params>(
+        elements,
+        len,
+        clusters,
+        max_clusters,
+        <T::Envelope as Envelope>::Point::DIMENSIONS,
+        height - 1,
+        &mut children,
+    );
+    // Clusters are consumed from the end of `elements`
+    children.reverse();
+    ParentNode::new_parent(children)
 }
 
-/// Represents a partitioning task that still needs to be done.
+/// Partitions the last `len` elements into `clusters` clusters of (almost) equal size and
+/// appends the subtree of each cluster to `children`, last cluster first.
 ///
-/// A partitioning iterator will take this item from its work queue and start partitioning
-/// "elements" into "clusters" clusters along the "remaining_axes" axes that were not used yet.
-struct PartitioningState<T: RTreeObject> {
-    elements: Vec<T>,
-    clusters: usize,
-    /// The number of clusters may be raised up to this value to get a full grid of clusters.
+/// The elements are split into slabs along one axis, every slab holding a whole number of
+/// clusters, and the slabs are split further along the `dims_left - 1` remaining axes. If
+/// `max_clusters` allows for it, the number of clusters is raised to fill the grid of slabs:
+/// clusters of the same shape overlap less than a grid with a row of wider clusters.
+fn partition_into_clusters<T, Params>(
+    elements: &mut Vec<T>,
+    len: usize,
+    mut clusters: usize,
     max_clusters: usize,
-    remaining_axes: usize,
-}
-
-/// Successively partitions the given elements into cluster groups and finally into clusters.
-struct PartitioningTask<T: RTreeObject, Params: RTreeParams> {
-    work_queue: Vec<PartitioningState<T>>,
+    dims_left: usize,
     subtree_height: usize,
-    _params: core::marker::PhantomData<Params>,
+    children: &mut Vec<RTreeNode<T>>,
+) where
+    T: RTreeObject,
+    <T::Envelope as Envelope>::Point: Point,
+    Params: RTreeParams,
+{
+    if clusters == 1 {
+        let subtree = bulk_load_recursive::<_, Params>(elements, len, subtree_height);
+        children.push(RTreeNode::Parent(subtree));
+        return;
+    }
+    // Try to split all clusters among the remaining dimensions as evenly as possible by taking
+    // the nth root. On the last axis, every slab is a cluster.
+    let slabs = ceil_root(clusters, dims_left);
+    let grid = slabs * clusters.div_ceil(slabs);
+    if grid <= max_clusters {
+        clusters = grid;
+    }
+    let slab_clusters_end = |slab: usize| slab * clusters / slabs;
+    let slab_end = |slab: usize| slab_clusters_end(slab) * len / clusters;
+
+    // The first axis gets the most slabs. Rotating it with the level of the tree keeps the
+    // envelopes of the nodes from being stretched along the same axis on every level.
+    let axis = (dims_left - 1 + subtree_height) % <T::Envelope as Envelope>::Point::DIMENSIONS;
+    let start = elements.len() - len;
+    select_slabs(&mut elements[start..], axis, 0, slabs, &slab_end);
+    for slab in (0..slabs).rev() {
+        let slab_clusters = slab_clusters_end(slab + 1) - slab_clusters_end(slab);
+        partition_into_clusters::<_, Params>(
+            elements,
+            slab_end(slab + 1) - slab_end(slab),
+            slab_clusters,
+            slab_clusters,
+            dims_left - 1,
+            subtree_height,
+            children,
+        );
+    }
 }
 
-impl<T: RTreeObject, Params: RTreeParams> Iterator for PartitioningTask<T, Params> {
-    type Item = RTreeNode<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(next) = self.work_queue.pop() {
-            let PartitioningState {
-                elements,
-                mut clusters,
-                max_clusters,
-                remaining_axes,
-            } = next;
-            if clusters == 1 {
-                // Partitioning finished successfully. The remaining cluster forms a new node
-                let data = bulk_load_recursive::<_, Params>(elements, self.subtree_height);
-                return RTreeNode::Parent(data).into();
-            } else {
-                // The cluster group needs to be partitioned further along the next axis.
-                // Try to split all clusters among the remaining axes as evenly as possible by
-                // taking the nth root. On the last axis, every cluster group is a cluster.
-                let groups = ceil_root(clusters, remaining_axes);
-                // Clusters of the same shape overlap less than a grid with a row of wider
-                // clusters, so fill the grid if that does not leave the subtrees too empty.
-                let grid = groups * clusters.div_ceil(groups);
-                if grid <= max_clusters {
-                    clusters = grid;
-                }
-                // The first axis gets the most cluster groups. Rotating it with the level of
-                // the tree keeps the envelopes of the nodes from being stretched along the
-                // same axis on every level.
-                let dimensions = <T::Envelope as Envelope>::Point::DIMENSIONS;
-                let axis = (remaining_axes - 1 + self.subtree_height) % dimensions;
-                let iterator = ClusterGroupIterator::new(elements, clusters, groups, axis);
-                self.work_queue
-                    .extend(iterator.map(|(slab, clusters)| PartitioningState {
-                        elements: slab,
-                        clusters,
-                        max_clusters: clusters,
-                        remaining_axes: remaining_axes - 1,
-                    }));
-            }
-        }
-        None
+/// Reorders `elements`, which hold the slabs `first..last`, so that every slab only contains
+/// elements that are not larger along `axis` than the elements of the following slabs.
+fn select_slabs<T>(
+    elements: &mut [T],
+    axis: usize,
+    first: usize,
+    last: usize,
+    slab_end: &impl Fn(usize) -> usize,
+) where
+    T: RTreeObject,
+{
+    if last - first < 2 {
+        return;
     }
+    let middle = first + (last - first) / 2;
+    let partition_point = slab_end(middle) - slab_end(first);
+    T::Envelope::partition_envelopes(axis, elements, partition_point);
+    let (lower, upper) = elements.split_at_mut(partition_point);
+    select_slabs(lower, axis, first, middle, slab_end);
+    select_slabs(upper, axis, middle, last, slab_end);
 }
 
 /// Returns the smallest `root` with `root.pow(degree) >= value`.
@@ -126,7 +136,7 @@ fn ceil_root(value: usize, degree: usize) -> usize {
 ///
 /// All leaves of the resulting tree are on the same level and every node but the root is at
 /// least half full.
-pub fn bulk_load_sequential<T, Params>(elements: Vec<T>) -> ParentNode<T>
+pub fn bulk_load_sequential<T, Params>(mut elements: Vec<T>) -> ParentNode<T>
 where
     T: RTreeObject,
     <T::Envelope as Envelope>::Point: Point,
@@ -139,7 +149,8 @@ where
         capacity = capacity.saturating_mul(Params::MAX_SIZE);
         height += 1;
     }
-    bulk_load_recursive::<_, Params>(elements, height)
+    let len = elements.len();
+    bulk_load_recursive::<_, Params>(&mut elements, len, height)
 }
 
 #[cfg(test)]
