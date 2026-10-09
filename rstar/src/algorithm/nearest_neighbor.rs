@@ -39,6 +39,33 @@ where
     fn partial_cmp(&self, other: &Self) -> Option<::core::cmp::Ordering> {
         Some(self.cmp(other))
     }
+
+    // The heap only uses these. NaN distances sort last, see `cmp_total`.
+    #[inline]
+    fn lt(&self, other: &Self) -> bool {
+        nan_last_lt(&other.distance, &self.distance)
+    }
+
+    #[inline]
+    fn le(&self, other: &Self) -> bool {
+        !nan_last_lt(&self.distance, &other.distance)
+    }
+
+    #[inline]
+    fn gt(&self, other: &Self) -> bool {
+        nan_last_lt(&self.distance, &other.distance)
+    }
+
+    #[inline]
+    fn ge(&self, other: &Self) -> bool {
+        !nan_last_lt(&other.distance, &self.distance)
+    }
+}
+
+#[inline]
+#[allow(clippy::eq_op, clippy::neg_cmp_op_on_partial_ord)]
+fn nan_last_lt<S: PartialOrd>(a: &S, b: &S) -> bool {
+    !(a >= b) && a == a
 }
 
 impl<T> Eq for RTreeNodeDistanceWrapper<'_, T> where T: PointDistance {}
@@ -325,6 +352,42 @@ mod test {
     use crate::object::PointDistance;
     use crate::rtree::RTree;
     use crate::test_utilities::*;
+
+    #[test]
+    fn test_heap_order_with_nan_distances() {
+        use super::RTreeNodeDistanceWrapper;
+        use crate::node::RTreeNode;
+        use core::cmp::Ordering;
+
+        let node = RTreeNode::Leaf([0.0f64, 0.0]);
+        let distances = [0.0, 1.0, f64::INFINITY, f64::NAN];
+        for l in distances {
+            for r in distances {
+                let left = RTreeNodeDistanceWrapper {
+                    node: &node,
+                    distance: l,
+                };
+                let right = RTreeNodeDistanceWrapper {
+                    node: &node,
+                    distance: r,
+                };
+                // The operators are implemented separately and must agree with `cmp`
+                let ordering = left.cmp(&right);
+                assert_eq!(left < right, ordering == Ordering::Less);
+                assert_eq!(left <= right, ordering != Ordering::Greater);
+                assert_eq!(left > right, ordering == Ordering::Greater);
+                assert_eq!(left >= right, ordering != Ordering::Less);
+                // Inverse order (min heap), NaN distances last
+                let expected = match (l.is_nan(), r.is_nan()) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
+                    (false, false) => r.partial_cmp(&l).unwrap(),
+                };
+                assert_eq!(ordering, expected);
+            }
+        }
+    }
 
     #[test]
     fn test_nearest_neighbor_empty() {
