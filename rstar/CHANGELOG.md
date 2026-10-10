@@ -1,9 +1,10 @@
 # Unreleased
 
 ## Changed
-- `bulk_load` partitions the elements in place instead of copying every slab into a new `Vec` and is 2-3 times faster. Nodes are filled more densely, so the resulting tree has fewer nodes and the minimal height.
+- Internal iteration (`locate_in_envelope_int`, `locate_in_envelope_intersecting_int`, `locate_at_point_int`, `locate_all_at_point_int` and their `_mut` variants) does not clone the envelope of every visited node anymore.
+- `locate_*` iterators test parent nodes before pushing them onto their stack.
 - `remove`, `remove_at_point`, `remove_with_selection_function` and `pop_nearest_neighbor` remove the element in place instead of taking the tree apart with a drain iterator, and do not allocate anymore.
-- `locate_*` iterators test nodes before pushing them onto their stack.
+- `bulk_load` partitions the elements in place instead of copying every slab into a new `Vec` and is 2-3 times faster. Nodes are filled more densely, so the resulting tree has fewer nodes and the minimal height.
 
 ## Fixed
 - Fixed `bulk_load` creating trees with leaves on different levels for some element counts (e.g. 25 elements with the default parameters), which made later insertions panic with "This is a bug in rstar.". All nodes of a bulk loaded tree but the root are now at least half full and never larger than `MAX_SIZE`.
