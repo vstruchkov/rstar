@@ -305,6 +305,12 @@ where
         Self::new_from_bulk_loading(elements, bulk_load::bulk_load_sequential::<_, Params>)
     }
 
+    /// Experimental: bulk loads the elements packed along a Hilbert curve instead of with OMT.
+    #[doc(hidden)]
+    pub fn bulk_load_hilbert_with_params(elements: Vec<T>) -> Self {
+        Self::new_from_bulk_loading(elements, bulk_load::bulk_load_hilbert::<_, Params>)
+    }
+
     /// Returns the number of objects in an r-tree.
     ///
     /// # Example
